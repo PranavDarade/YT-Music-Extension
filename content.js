@@ -74,3 +74,24 @@ function parseVideoIdFromHref(href) {
     const url = new URL(href, window.location.origin);
     return url.searchParams.get('v');
 }
+
+// Id (Meta Extraction)
+
+function extractSongDataFromRow(rowEl) {
+    if (!rowEl) return null;
+    // Try data-id attribute first
+    const dataId = rowEl.getAttribute('data-id');
+    if (dataId) return dataId;
+    // Try data-video-id attribute
+    const dataVideoId = rowEl.getAttribute('data-video-id');
+    if (dataVideoId) return dataVideoId;
+    // Try video-id attribute
+    const videoId = rowEl.getAttribute('video-id');
+    if (videoId) return videoId;
+    // Fallback to href parsing
+    const anchor = rowEl.querySelector('a[href*="watch"]');
+    if (anchor) {
+        return parseVideoIdFromHref(anchor.getAttribute('href'));
+    }
+    return null;
+}
