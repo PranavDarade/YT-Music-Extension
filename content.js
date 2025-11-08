@@ -6,7 +6,7 @@ const QUEUE_SELECTOR_CANDITATES = [
     'ytmusic-player-queue-renderer',
     '.player-queue'
 ];
-const QUEUE_ITEM_SELECTOR = [
+const QUEUE_ITEM_SELECTORS = [
     'ytmusic-player-queue-item',
     '.ytmusic-player-queue-item-renderer',
 ];
@@ -27,7 +27,6 @@ let mutationObserver = null;
 let menuObserver = null;
 
 // Utility Helpers (Conceptual)
-
 function debounce(fn, ms) {
     let timer = null;
     return (...args) => {
@@ -68,7 +67,6 @@ function dedupeKeepFirstOccurrence(idList) {
 }
 
 // Safe extract string id from URL 
-
 function parseVideoIdFromHref(href) {
     if(!href) return null;
     const url = new URL(href, window.location.origin);
@@ -76,22 +74,50 @@ function parseVideoIdFromHref(href) {
 }
 
 // Id (Meta Extraction)
-
 function extractSongDataFromRow(rowEl) {
     if (!rowEl) return null;
-    // Try data-id attribute first
-    const dataId = rowEl.getAttribute('data-id');
-    if (dataId) return dataId;
-    // Try data-video-id attribute
-    const dataVideoId = rowEl.getAttribute('data-video-id');
-    if (dataVideoId) return dataVideoId;
-    // Try video-id attribute
-    const videoId = rowEl.getAttribute('video-id');
-    if (videoId) return videoId;
-    // Fallback to href parsing
-    const anchor = rowEl.querySelector('a[href*="watch"]');
-    if (anchor) {
-        return parseVideoIdFromHref(anchor.getAttribute('href'));
+    const queueItem = {
+        dataId : rowEl.getAttribute('data-id'),
+        dataVideoId : rowEl.getAttribute('data-video-id'),
+        videoId : rowEl.getAttribute('video-id'),
+        title : rowEl.querySelector('.yt-formatted-string.title')?.textContent || null,
+        artist : rowEl.querySelector('.yt-simple-endpoint.style-scope.yt-formatted-string')?.textContent || null,
+        duration : rowEl.querySelector('.time-status.style-scope.ytmusic-player-queue-item')?.textContent || null,
+        index : rowEl.querySelector('.index.style-scope.ytmusic-player-queue-item')?.textContent || null,
+        sourceContext : rowEl.querySelector('.source-content.style-scope.ytmusic-player-queue-item')?.textContent || null,
+        isPlaying : rowEl.classList.contains('playing'),
+        elementRef : rowEl
+    };
+    return {
+        id : queueItem.dataId || queueItem.dataVideoId || queueItem.videoId,
+        meta : {
+            title : queueItem.title,
+            artist : queueItem.artist,
+            duration : queueItem.duration,
+            index : queueItem.index,
+            sourceContext : queueItem.sourceContext,
+            isPlaying : queueItem.isPlaying,
+            elementRef : queueItem.elementRef
+        }
     }
-    return null;
+}
+    
+// Scraping queue from DOM and returning array of song objects
+function scrapeQueueFromDOM() {
+    for (const queueSelector of QUEUE_SELECTOR_CANDIDATES) {
+        const queueEl = document.querySelector(queueSelector);
+        if (queueEl) {
+            //extractSongDataFromRow(queueEl);
+            const itemEls = queueEl.querySelectorAll(QUEUE_ITEM_SELECTORS.join(','));
+            const idList = [];
+            itemEls.forEach(itemEl => {
+                const songId = extractSongDataFromRow(itemEl);
+                if (songId) {
+                    idList.push(songId);
+                }
+            });
+            return idList;
+        }
+    }
+    return [];
 }
