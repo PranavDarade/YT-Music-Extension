@@ -1,3 +1,30 @@
+console.log('[YTQueueExt] content script loaded');
+
+// Page Content script bridge
+window.addEventListener('message', (ev) => {
+    try {
+        if (!ev.data || ev.data.source !== 'YTQ_PAGE') return;
+        if (ev.data.type === 'REQUEST_STATE') {
+            const payload = {
+                myQueue: (myQueue || []).map(s => ({
+                    id: s.id,
+                    title: s.meta?.title || null,
+                    artist: s.meta?.artist || null,
+                    isPlaying: s.meta?.isPlaying 
+                })),
+                isShuffleOn: !!isShuffleOn,
+                currentIndex: currentIndex || 0
+            };
+            window.postMessage({ source: 'YTQ_EXT', type: 'RESPONSE_STATE', payload}, '*');
+            } else if (ev.data.type === 'REQUEST_RELINK') {
+                relinkElementRefs();
+                window.postMessage({ source: 'YTQ_EXT', type: 'RESPONSE_RELINK_DONE'}, '*');
+            }
+        } catch (e) {
+            console.warn('[YTQ bridge] error handling message', e);
+        }
+});
+
 // Configurations and Constants
 const DEBOUNCE_MS = 200;
 const MENU_SCAN_DELAY_MS = 120;
@@ -92,8 +119,12 @@ function dedupeKeepFirstOccurrence(idList) {
 // Safe extract string id from URL 
 function parseVideoIdFromHref(href) {
     if(!href) return null;
-    const url = new URL(href, window.location.origin);
-    return url.searchParams.get('v');
+    try {
+        const url = new URL(href, window.location.origin);
+        return url.searchParams.get('v');
+    } catch (e) {
+        return null;
+    }
 }
 
 // Id (Meta Extraction)
@@ -339,7 +370,7 @@ function installMenuObserver() {
         menuItems.forEach(item => {
             const text = (item.querySelector('.title')?.textContent.trim().toLowerCase()) || '';
 
-            // 🧹 Reset old handlers before re-binding
+            // Reset old handlers before re-binding
             const cleanItem = item.cloneNode(true);
             item.replaceWith(cleanItem);
 
@@ -406,7 +437,6 @@ function resetInternalState() {
 
 // Initialization
 function init() {
-    console.log("Queue Extension Loaded");
     loadQueueState(); // repopulates myQueue minimally and attempts to re-link
     if (!myQueue || myQueue.length === 0) myQueue = scrapeQueueFromDOM();
     installQueueObserver();
@@ -452,4 +482,15 @@ function loadQueueState() {
     const node = document.querySelector(`[data-video-id="${item.id}"], [video-id="${item.id}"], [data-id="${item.id}"]`);
     if (node) item.meta.elementRef = node;
   });
+}
+
+// relink elementRefs on demand
+function relinkElementRefs() {
+    myQueue.forEach(item =>{
+        if (!item.meta) item.meta = {};
+        if (!item.meta.elementRef) {
+            const node = document.querySelector(`[data-video-id="${item.id}"], [video-id="${item.id}"], [data-id="${item.id}"]`);
+            if (node) item.meta.elementRef = node;
+        }
+    });
 }
