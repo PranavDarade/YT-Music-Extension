@@ -494,3 +494,16 @@ function relinkElementRefs() {
         }
     });
 }
+
+// Autostart 
+function waitForYTMusic() {
+  const player = document.querySelector('ytmusic-player-bar');
+  if (player) {
+    console.log('[YTQueueExt] YT Music detected → initializing...');
+    init();
+  } else {
+    console.log('[YTQueueExt] waiting for YT Music to load...');
+    setTimeout(waitForYTMusic, 1000);
+  }
+}
+waitForYTMusic();
