@@ -1,16 +1,21 @@
 {
-    "manifest_version" : "3",
-    "name" : "YT Music Queue Enhancer",
-    "version" : "1.0.0",
-    "description" : "Enhanes the Youtube Music queue with spotify-like queue algorithm.",
-    "permissions" : [
+    "manifest_version": 3,
+    "name": "Youtube Music Queue Enhancer",
+    "description": "Custom shuffle, smarter add-to-queue, and persistent queue for YT Music.",
+    "version": "1.0",
+    "permissions": [
         "scripting",
-        "tabs"
+        "storage",
+        "activeTab"
     ],
-    "content_scripts" : [
+    "host_permissions": [
+        "https://music.youtube.com/*"
+    ],
+    "content_scripts": [
         {
-            "matches" : [ "https://music.youtube.com/*" ],
-            "js" : [ "content.js" ]
+            "matches": ["https://music.youtube.com/*"],
+            "js": ["content.js"],
+            "run_at": "document_idle"
         }
     ]
 }

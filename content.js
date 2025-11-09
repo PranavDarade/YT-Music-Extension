@@ -39,6 +39,21 @@ function debounce(fn, ms) {
     };
 }
 
+function serializeQueue() {
+  return myQueue.map(s => ({
+    id: s.id,
+    title: s.meta.title,
+    artist: s.meta.artist,
+    duration: s.meta.duration
+  }));
+}
+
+function randomBetween(min, max) {
+    if (max <= min) return min;
+    const rand = Math.floor(Math.random() * (max - min + 1)) + min;
+    return Math.max(min, Math.min(rand, max));
+}
+
 // Rotate list so that startId becomes the first element (Preserves order)
 function rotateFrom(list, startId) {
     const idx = list.indexOf(startId);
@@ -88,7 +103,7 @@ function extractSongDataFromRow(rowEl) {
         dataId : rowEl.getAttribute('data-id'),
         dataVideoId : rowEl.getAttribute('data-video-id'),
         videoId : rowEl.getAttribute('video-id'),
-        title : rowEl.querySelector('.yt-formatted-string.title')?.textContent || null,
+        title: rowEl.querySelector('.title')?.textContent?.trim() || rowEl.querySelector('.yt-formatted-string')?.textContent?.trim() || null,
         artist : rowEl.querySelector('.yt-simple-endpoint.style-scope.yt-formatted-string')?.textContent || null,
         duration : rowEl.querySelector('.time-status.style-scope.ytmusic-player-queue-item')?.textContent || null,
         index : rowEl.querySelector('.index.style-scope.ytmusic-player-queue-item')?.textContent || null,
@@ -129,6 +144,7 @@ function scrapeQueueFromDOM() {
             return queueList;
         }
     }
+    console.warn("Queue container not found in DOM.");
     return [];
 }
 
@@ -139,14 +155,15 @@ function toggleShuffle() {
         // enable shuffle
         originalOrder = myQueue.map(item => item.id);
         shuffledOrder = fisherYatesShuffle(originalOrder.slice());
-        myQueue = rotateFrom(shuffledOrder, currentId).map(id => getSongById(id));
+        myQueue = rotateFrom(shuffledOrder, currentId).map(id => getSongById(id)).filter(Boolean); // remove nulls
         isShuffleOn = true;
     } else {
         // disable shuffle
-        myQueue = rotateFrom(originalOrder, currentId).map(id => getSongById(id));
+        myQueue = rotateFrom(originalOrder, currentId).map(id => getSongById(id)).filter(Boolean);
         isShuffleOn = false;
     }
     applyQueueToPlayer(myQueue);
+    saveQueueState();
 }
 
 // Current Song Id
@@ -157,27 +174,65 @@ function getCurrentPlayingId() {
 
 // Apply Queue to Player (DOM Manipulation)
 function applyQueueToPlayer(queue) {
-    const queueEl = QUEUE_SELECTOR_CANDIDATES.map(sel => document.querySelector(sel)).find(el => el);
+    const queueEl = findQueueContainer();
     if (!queueEl) return;
 
     // Clear existing queue items
-    while (queueEl.firstChild) {
-        queueEl.removeChild(queueEl.firstChild);
-    }
+    while (queueEl.firstChild) queueEl.removeChild(queueEl.firstChild);
     
-    // Append items in new order
+    const frag = document.createDocumentFragment(); // Build new order in a fragment for performance
+
+    // Process each song
     for (const song of queue) {
-        queueEl.appendChild(song.meta.elementRef);
+        // Attempt to relink if elementRef missing/stale
+        if (!song.meta.elementRef || !document.contains(song.meta.elementRef)) {
+            const relink = document.querySelector(
+                `[data-video-id="${song.id}"], [video-id="${song.id}"], [data-id="${song.id}"]`
+            );
+            if (relink) {
+                song.meta.elementRef = relink;
+            } else {
+                console.warn(`Skipping song '${song.meta.title}' — missing or stale elementRef.`);
+                continue;
+            }
+        }
+
+        // Try to find the live DOM node or fallback to stored ref
+        const node = document.querySelector(
+            `[data-video-id="${song.id}"], [video-id="${song.id}"], [data-id="${song.id}"]`
+        ) || song.meta.elementRef;
+    
+        if (node && document.contains(node)) {
+            // Refresh ref if we found a newer node
+            if (node !== song.meta.elementRef) song.meta.elementRef = node;
+            
+            // Append if not already in the container
+            if (!queueEl.contains(node)) frag.appendChild(node);
+        }
     }
+
+    // Apply all updates at once
+    queueEl.appendChild(frag);
+}
+
+function findQueueContainer() {
+    for (const selector of QUEUE_SELECTOR_CANDIDATES) {
+        const el = document.querySelector(selector);
+        if (el) return el;
+    }
+    return null;
 }
 
 function installQueueObserver() {
-    const container = document.querySelector(QUEUE_SELECTOR_CANDIDATES.join(','));
-    if (!container) return;
-    const observer = new MutationObserver(debounce( () => {
-        myQueue = scrapeQueueFromDOM();
+    if (mutationObserver) mutationObserver.disconnect();
+
+    const observer = new MutationObserver(debounce(() => {
+        const container = findQueueContainer();
+        if (container) myQueue = scrapeQueueFromDOM();
     }, DEBOUNCE_MS));
-    observer.observe(container, { childList: true, subtree: true });
+
+    const container = findQueueContainer();
+    if (container) observer.observe(container, { childList: true, subtree: true });
     mutationObserver = observer;
 }
 
@@ -197,12 +252,13 @@ function initPlaybackObserver() {
 }
 
 function handleNextSong() {
-    currentIndex = getCurrentPlayingId();
-    const idx = myQueue.findIndex(s => s.id === getCurrentPlayingId());
+    const currentId = getCurrentPlayingId();
+    const idx = myQueue.findIndex(s => s.id === currentId);
+    if (idx === -1) return;
     const nextIdx = (idx + 1) % myQueue.length;
     const nextSong = myQueue[nextIdx];
-    if (nextSong) {
-        nextSong.meta.elementRef.querySelector('.play-button').click();
+    if (nextSong?.meta?.elementRef) {
+        nextSong.meta.elementRef.querySelector('.play-button, ytmusic-play-button-renderer')?.click();
         currentIndex = nextIdx;
     }
 }
@@ -241,18 +297,30 @@ function simulateClick(el) {
 }
 
 function observePlayingState() {
-    const container = QUEUE_SELECTOR_CANDIDATES.map(sel => document.querySelector(sel)).find(el => el) || 
-    document.querySelector('ytmusic-player-bar') || null;
-    const observer = new MutationObserver(debounce( () => {
-        const currentId = myQueue.find(s => s.meta.isPlaying)?.id || null;
-        if (!currentId) {
+    const container = findQueueContainer() || document.querySelector('ytmusic-player-bar');
+    if (!container) return;
+
+    let lastPlayingId = getCurrentPlayingId();
+
+    const observer = new MutationObserver(debounce(() => {
+        const currentId = getCurrentPlayingId();
+
+        if (currentId && currentId !== lastPlayingId) {
+            // Song changed → update currentIndex
+            currentIndex = myQueue.findIndex(s => s.id === currentId);
+            lastPlayingId = currentId;
+        } 
+        else if (!currentId && lastPlayingId) {
+            // Nothing playing anymore → end of track or queue
             onTrackEndDetected();
+            lastPlayingId = null;
         }
     }, DEBOUNCE_MS));
-    if (container) {
-        observer.observe(container, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
-    }
+
+    observer.observe(container, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+    playbackObserver = observer;
 }
+
 
 // Context Menu Interception
 document.addEventListener('contextmenu', (event) => {
@@ -263,39 +331,32 @@ document.addEventListener('contextmenu', (event) => {
 })
 
 function installMenuObserver() {
-    const container = document.querySelector('ytmusic-menu-popup-renderer');
-    if (!container) return;
-    const observer = new MutationObserver(debounce( () => {
+    const observer = new MutationObserver(debounce(() => {
+        const container = document.querySelector('ytmusic-menu-popup-renderer');
+        if (!container) return;
+
         const menuItems = container.querySelectorAll(MENU_ITEM_SELECTORS.join(','));
         menuItems.forEach(item => {
-            const textEl = item.querySelector('.title.style-scope.ytmusic-menu-service-item-renderer, .title.style-scope.ytmusic-menu-navigation-item-renderer');
-            const text = (item.querySelector('.title.style-scope.ytmusic-menu-service-item-renderer, .title.style-scope.ytmusic-menu-navigation-item-renderer')?.textContent || '').trim().toLowerCase();
-            if (text.includes(MENU_PLAYNEXT_TEXT)) {
-                item.addEventListener('click', () => handlePlayNext(lastMenuTarget), { once: true});
-            } else if (text.includes(MENU_ADDTOQUEUE_TEXT)) {
-                item.addEventListener('click', () => handleAddToQueue(lastMenuTarget), { once: true});
-            } else if (text.includes(MENU_STARTRADIO_TEXT)) {
-                item.addEventListener('click', () => handleStartRadio(lastMenuTarget), { once: true});
-            }
-        })
-    }, MENU_SCAN_DELAY_MS));
-    observer.observe(container, { childList: true, subtree: true });
-    menuObserver = observer; 
-}
+            const text = (item.querySelector('.title')?.textContent.trim().toLowerCase()) || '';
 
-// Detection Logic
-function onMenuChanged() {
-    const menuItems = document.querySelectorAll(MENU_ITEM_SELECTORS.join(','));
-    menuItems.forEach(item => {
-        const textEl = item.innerText.toLowerCase();
-        if (textEl.includes(MENU_PLAYNEXT_TEXT)) {
-            handlePlayNext(lastMenuTarget);
-        } else if (textEl.includes(MENU_ADDTOQUEUE_TEXT)) {
-            handleAddToQueue(lastMenuTarget);
-        } else if (textEl.includes(MENU_STARTRADIO_TEXT)) {
-            handleStartRadio(lastMenuTarget);
-        }
-    })
+            // 🧹 Reset old handlers before re-binding
+            const cleanItem = item.cloneNode(true);
+            item.replaceWith(cleanItem);
+
+            if (text.includes(MENU_PLAYNEXT_TEXT)) {
+                cleanItem.addEventListener('click', () => handlePlayNext(lastMenuTarget), { once: true });
+            } 
+            else if (text.includes(MENU_ADDTOQUEUE_TEXT)) {
+                cleanItem.addEventListener('click', () => handleAddToQueue(lastMenuTarget), { once: true });
+            } 
+            else if (text.includes(MENU_STARTRADIO_TEXT)) {
+                cleanItem.addEventListener('click', () => handleStartRadio(lastMenuTarget), { once: true });
+            }
+        });
+    }, MENU_SCAN_DELAY_MS));
+
+    observer.observe(document.body, { childList: true, subtree: true });
+    menuObserver = observer;
 }
 
 // Handlers for Menu Actions
@@ -303,11 +364,13 @@ function handlePlayNext(targetRow) {
     const song = extractSongDataFromRow(targetRow);
     if (!song || !song.id) return;
     const currentId = getCurrentPlayingId();
-    const currentIdx = findIndex(myQueue.find(s => s.id === currentId));
+    const currentIdx = myQueue.findIndex(s => s.id === currentId);
     const insertionIdx = currentIdx + 1;
     myQueue = myQueue.filter(s => s.id !== song.id); // Remove if already in queue
-    myQueue.splice(insertionIdx, 0, song); // Insert after current
+    myQueue.splice(insertionIdx, 0, song);
     applyQueueToPlayer(myQueue);
+    saveQueueState();
+
 }
 
 function handleAddToQueue(targetRow) {
@@ -315,8 +378,10 @@ function handleAddToQueue(targetRow) {
     if (!song || !song.id) return;
     myQueue = myQueue.filter(s => s.id !== song.id);
     const insertionIdx = randomBetween(currentIndex + 2, myQueue.length);
-    myQueue.splice(insertionIdx, 0, song); // Insert at random position after current
+    if (insertionIdx <= currentIndex) currentIndex++; // Adjust current index if needed
+    myQueue.splice(insertionIdx, 0, song);
     applyQueueToPlayer(myQueue);
+    saveQueueState();
 }
 
 async function handleStartRadio(targetRow) {
@@ -327,9 +392,8 @@ async function handleStartRadio(targetRow) {
     myQueue = scrapeQueueFromDOM() || [];
     if (myQueue.length > 0) {
         currentIndex = myQueue.findIndex(s => s.meta.isPlaying);
-    } else {
-        currentIndex = 0;
     }
+    saveQueueState();
 }
 
 function resetInternalState() {
@@ -342,7 +406,8 @@ function resetInternalState() {
 
 // Initialization
 function init() {
-    myQueue = scrapeQueueFromDOM();
+    loadQueueState(); // repopulates myQueue minimally and attempts to re-link
+    if (!myQueue || myQueue.length === 0) myQueue = scrapeQueueFromDOM();
     installQueueObserver();
     observePlayingState();
     installMenuObserver();
@@ -360,4 +425,30 @@ function init() {
     prevBtn?.addEventListener('click', () => {
         handlePrevSong();
     })
+    applyQueueToPlayer(myQueue);
+}
+
+// Persist Extension State
+function saveQueueState() {
+  const simpleQueue = serializeQueue();
+  localStorage.setItem('ytmQueueState', JSON.stringify({
+    queue: simpleQueue,
+    isShuffleOn,
+    currentIndex
+  }));
+}
+
+function loadQueueState() {
+  const data = JSON.parse(localStorage.getItem('ytmQueueState') || '{}');
+  if (!data.queue) return;
+  // Recreate minimal myQueue entries (no elementRef)
+  myQueue = data.queue.map(q => ({ id: q.id, meta: { title: q.title, artist: q.artist, duration: q.duration } }));
+  isShuffleOn = data.isShuffleOn || false;
+  currentIndex = data.currentIndex || 0;
+
+  // Attempt to re-link elementRef to live DOM nodes when possible:
+  myQueue.forEach(item => {
+    const node = document.querySelector(`[data-video-id="${item.id}"], [video-id="${item.id}"], [data-id="${item.id}"]`);
+    if (node) item.meta.elementRef = node;
+  });
 }
