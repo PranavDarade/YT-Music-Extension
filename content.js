@@ -406,6 +406,7 @@ function resetInternalState() {
 
 // Initialization
 function init() {
+    console.log("Queue Extension Loaded");
     loadQueueState(); // repopulates myQueue minimally and attempts to re-link
     if (!myQueue || myQueue.length === 0) myQueue = scrapeQueueFromDOM();
     installQueueObserver();
