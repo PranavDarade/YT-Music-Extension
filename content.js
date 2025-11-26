@@ -437,7 +437,7 @@ function init() {
     console.log('[YTQueueExt] scanning possible queue containers...');
     QUEUE_SELECTOR_CANDIDATES.forEach(sel => {
         const el = document.querySelector(sel);
-        console.log(sel, '=>', el ? '✅ FOUND' : '❌ not found');
+        console.log(sel, '=>', el ? 'FOUND' : 'NOT FOUND');
     });
     loadQueueState(); // repopulates myQueue minimally and attempts to re-link
     if (!myQueue || myQueue.length === 0) myQueue = scrapeQueueFromDOM();
