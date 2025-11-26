@@ -21,7 +21,7 @@ window.addEventListener('message', (ev) => {
                 window.postMessage({ source: 'YTQ_EXT', type: 'RESPONSE_RELINK_DONE'}, '*');
             }
         } catch (e) {
-            console.warn('[YTQ bridge] error handling message', e);
+            console.warn('[YTQ bridge error handling message', e);
         }
 });
 
@@ -29,13 +29,10 @@ window.addEventListener('message', (ev) => {
 const DEBOUNCE_MS = 200;
 const MENU_SCAN_DELAY_MS = 120;
 const QUEUE_SELECTOR_CANDIDATES = [
-    'ytmusic-player-queue',
-    'ytmusic-player-queue-renderer',
-    '.player-queue'
+    'ytmusic-player-queue'
 ];
 const QUEUE_ITEM_SELECTORS = [
     'ytmusic-player-queue-item',
-    '.ytmusic-player-queue-item-renderer',
     '.ytmusic-player-queue-item'
 ];
 const MENU_ITEM_SELECTORS = [
@@ -437,6 +434,11 @@ function resetInternalState() {
 
 // Initialization
 function init() {
+    console.log('[YTQueueExt] scanning possible queue containers...');
+    QUEUE_SELECTOR_CANDIDATES.forEach(sel => {
+        const el = document.querySelector(sel);
+        console.log(sel, '=>', el ? '✅ FOUND' : '❌ not found');
+    });
     loadQueueState(); // repopulates myQueue minimally and attempts to re-link
     if (!myQueue || myQueue.length === 0) myQueue = scrapeQueueFromDOM();
     installQueueObserver();
