@@ -15,9 +15,8 @@ function injectCloak() {
     const style = document.createElement('style');
     style.id = 'ytq-cloak';
     style.textContent = `
-        ytmusic-player-queue {
-            visibility: hidden !important;
-            pointer-events: none !important;
+        ytmusic-player-queue #contents > ytmusic-playlist-panel-video-wrapper-renderer{
+            display: none !important;
         }
         #ytq-host {
             visibility: visible !important;
@@ -31,9 +30,7 @@ function injectCloak() {
 function buildHost() {
     if (document.getElementById('ytq-host')) return; 
 
-    const panel = document.querySelector('ytmusic-tab-renderer[tab-identifier="QUEUE"]')
-                || document.querySelector('ytmusic-player-queue')
-                || document.querySelector('#side-panel');
+    const panel = document.querySelector('ytmusic-player-queue #contents');
     
     console.log('[YTQueueExt] Panel found:', panel?.tagName ?? 'NULL');
     if (!panel) return;
@@ -247,9 +244,7 @@ function renderCustomQueue() {
 // Reach outside Shadow DOM, click hidden native row
 function proxyClickNativeItem(index) {
     const nativeRows = document.querySelectorAll(
-        'ytmusic-player-queue-item, ' + 
-        'ytmusic-queue-item, ' +
-        '#queue .song-row'
+        'ytmusic-player-queue-item'
     );
 
     const target = nativeRows[index];
