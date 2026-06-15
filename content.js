@@ -41,7 +41,7 @@ function buildHost() {
 
     const style = document.createElement('style');
     style.textContent = `
-        :host { dispay: block }
+        :host { display: block; }
         #ytq-root {
             font-family: 'Youtube', Roboto, sans-serif;
             color: #e8eaed;
@@ -54,7 +54,7 @@ function buildHost() {
             display: flex;
             align-items: center;
             padding: 6px 16px;
-            gap; 10px;
+            gap: 10px;
             cursor: pointer;
             border-radius: 4px;
             transition: background 0.15s;
@@ -65,19 +65,19 @@ function buildHost() {
         .ytq-title {
             font-size: 13px;
             font-weight: 500;
-            white-space: nowarp;
+            white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
         }
         .ytq-artist {
             font-size: 11px;
             color: #aaa;
-            white-space: nowarp;
-            overflow: hidden
+            white-space: nowrap;
+            overflow: hidden;
             text-overflow: ellipsis;
         }
         .ytq-duration {
-            font-sizr: 11px;
+            font-size: 11px;
             color: #aaa;
             flex-shrink: 0;
         }
@@ -85,16 +85,26 @@ function buildHost() {
             width: 14px;
             height: 14px;
             flex-shrink: 0;
-            fill: #1ed760:
+            fill: #1ed760;
         }
     `;
     shadowRoot.appendChild(style);
 
     const root = document.createElement('div');
     root.id = 'ytq-root';
+
+    const toolbar = document.createElement('div');
+    toolbar.style.cssText = 'padding: 6px 16px; display:flex; gap:8px;';
+
+    const shuffleBtn = document.createElement('button');
+    shuffleBtn.textContent = 'Shuffle Upcoming';
+    shuffleBtn.style.cssText = 'background:#333; color:#e8eaed; border:none; border-radius:4px; padding:4px 10px; cursor:pointer; font-size:12px;';
+    shuffleBtn.addEventListener('click', shuffleUpcoming);
+    toolbar.appendChild(shuffleBtn);
+    shadowRoot.appendChild(toolbar);
     shadowRoot.appendChild(root);
 
-    console.log('[YTQueueExt} Shadow DOM host mounted.');
+    console.log('[YTQueueExt] Shadow DOM host mounted.');
 }
 
 function renderCustomQueue() {
@@ -107,7 +117,7 @@ function renderCustomQueue() {
 
     myQueue.forEach((song, index) => {
         const row = document.createElement('div');
-        row.className = 'ytq-row' + (song.isPlaying ? 'active' : '');
+        row.className = 'ytq-row' + (song.isPlaying ? ' active' : '');
         row.dataset.index = index;
 
         if (song.isPlaying) {
@@ -141,7 +151,7 @@ function renderCustomQueue() {
 
         row.addEventListener('click', () => {
             proxyClickNativeItem(index);
-        });
+        }); 
 
         frag.appendChild(row);
     });
@@ -182,6 +192,7 @@ function findNestKeys(obj, keyToFind) {
 
 // Main Parser
 function processQueueData(data) {
+    clearPersistedState();
     try {
         const playlistPanel = findNestKeys(data, 'playlistPanelRenderer');
 
@@ -208,9 +219,13 @@ function processQueueData(data) {
 
         console.log('[YTQueueExt] Cleaned Queue:', cleanQueue);
 
-        myQueue = cleanQueue;
+        const seen = new Set();
+        myQueue = cleanQueue.filter(song => {
+            if (seen.has(song.id)) return false;
+            seen.add(song.id);
+            return true;
+        });
         currentIndex = myQueue.findIndex(s => s.isPlaying);
-
         renderCustomQueue();
     } catch (e) {
         console.error('[YTQueueExt] Parsing error:', e);
@@ -237,8 +252,76 @@ function tryMount() {
     }
 }
 
+// Fisher Yates Shuffle (Custom Shuffle Engine)
+function fisherYatesShuffle(arr) {
+    const a = [...arr];
+    for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+}
+
+function shuffleUpcoming() {
+    if (currentIndex < 0 || myQueue.length === 0) return;
+
+    const past   = myQueue.slice(0, currentIndex + 1);
+    const future = myQueue.slice(currentIndex + 1);
+
+    myQueue = [...past, ...fisherYatesShuffle(future)];
+
+    saveQueueState();
+    renderCustomQueue();
+}
+
+// Persistance Layer
+const STORAGE_KEY = 'ytq_state';
+
+function saveQueueState() {
+    chrome.storage.local.set({
+        [STORAGE_KEY]: JSON.stringify({
+            queue:         myQueue,
+            currentIndex:  currentIndex,
+            shuffleActive: true
+        })
+    });
+}
+
+function loadPersistanceState(onMiss) {
+    chrome.storage.local.get(STORAGE_KEY, (result) => {
+        if (chrome.runtime.lastError || !result[STORAGE_KEY]) {
+            onMiss();
+            return;
+        }
+
+        try {
+            const saved = JSON.parse(result[STORAGE_KEY]);
+            if (saved.queue && saved.queue.length > 0) {
+                myQueue      = saved.queue;
+                currentIndex = saved.currentIndex ?? 0;
+                console.log('[YTQueueExt] Restored persisted queue:', myQueue.length, 'tracks');
+                buildHost();
+                renderCustomQueue();
+                return;
+            }
+        } catch (e) {
+            console.warn('[YTQueueExt] Persisted state corrupt, falling back.', e);
+        }
+
+        onMiss();
+    });
+}
+
+function boot() {
+    loadPersistanceState(() => tryMount());
+}
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', tryMount);
+    document.addEventListener('DOMContentLoaded', boot);
 } else {
-    tryMount();
+    boot();
+}
+
+// Wipe saved State
+function clearPersistedState() {
+    chrome.storage.local.remove(STORAGE_KEY);
 }
