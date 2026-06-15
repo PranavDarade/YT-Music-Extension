@@ -19,6 +19,10 @@ function injectCloak() {
             visibility: hidden !important;
             pointer-events: none !important;
         }
+        #ytq-host {
+            visibility: visible !important;
+            pointer-events: auto !important;
+        }
     `;
     (document.head || document.documentElement).appendChild(style);
 }
@@ -31,6 +35,7 @@ function buildHost() {
                 || document.querySelector('ytmusic-player-queue')
                 || document.querySelector('#side-panel');
     
+    console.log('[YTQueueExt] Panel found:', panel?.tagName ?? 'NULL');
     if (!panel) return;
 
     const host = document.createElement('div');
@@ -41,51 +46,112 @@ function buildHost() {
 
     const style = document.createElement('style');
     style.textContent = `
-        :host { display: block; }
+        :host { display: block; height: 100%; }
+
         #ytq-root {
-            font-family: 'Youtube', Roboto, sans-serif;
+            font-family: 'YouTube Sans', Roboto, Arial, sans-serif;
             color: #e8eaed;
-            background: #212121;
-            padding: 8px 0;
+            background: transparent;
+            padding: 4px 0 16px;
             overflow-y: auto;
-            max-height: 100%;
+            height: 100%;
+            box-sizing: border-box;
         }
+
+        .ytq-toolbar {
+            padding: 8px 16px 12px;
+            display: flex;
+            gap: 8px;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+            margin-bottom: 4px;
+        }
+
+        .ytq-btn {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(255,255,255,0.08);
+            color: #e8eaed;
+            border: none;
+            border-radius: 20px;
+            padding: 6px 14px;
+            cursor: pointer;
+            font-size: 13px;
+            font-family: inherit;
+            font-weight: 500;
+            letter-spacing: 0.2px;
+            transition: background 0.15s;
+        }
+        .ytq-btn:hover { background: rgba(255,255,255,0.15); }
+        .ytq-btn:active { background: rgba(255,255,255,0.2); }
+
         .ytq-row {
             display: flex;
             align-items: center;
             padding: 6px 16px;
-            gap: 10px;
+            gap: 12px;
             cursor: pointer;
-            border-radius: 4px;
-            transition: background 0.15s;
+            border-radius: 0;
+            transition: background 0.12s;
+            min-height: 52px;
+            position: relative;
         }
-        .ytq-row:hover { background: rgba(255,255,255,0.08); }
-        .ytq-row.active { background: rgba(255,255,255,0.13); }
+        .ytq-row:hover { background: rgba(255,255,255,0.07); }
+        .ytq-row.active {
+            background: rgba(255,255,255,0.10);
+        }
+        .ytq-row.active::before {
+            content: '';
+            position: absolute;
+            left: 0; top: 0; bottom: 0;
+            width: 3px;
+            background: #f03;
+            border-radius: 0 2px 2px 0;
+        }
+
+        .ytq-index {
+            font-size: 12px;
+            color: #717171;
+            width: 16px;
+            text-align: center;
+            flex-shrink: 0;
+        }
+
+        .ytq-playing-icon {
+            width: 16px;
+            height: 16px;
+            flex-shrink: 0;
+            fill: #f03;
+        }
+
         .ytq-info { flex: 1; overflow: hidden; }
+
         .ytq-title {
             font-size: 13px;
             font-weight: 500;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+            color: #e8eaed;
+            line-height: 1.4;
         }
+        .ytq-row.active .ytq-title { color: #fff; }
+
         .ytq-artist {
-            font-size: 11px;
+            font-size: 12px;
             color: #aaa;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+            margin-top: 2px;
+            line-height: 1.3;
         }
+
         .ytq-duration {
-            font-size: 11px;
-            color: #aaa;
+            font-size: 12px;
+            color: #717171;
             flex-shrink: 0;
-        }
-        .ytq-playing-icon {
-            width: 14px;
-            height: 14px;
-            flex-shrink: 0;
-            fill: #1ed760;
+            font-variant-numeric: tabular-nums;
         }
     `;
     shadowRoot.appendChild(style);
@@ -94,11 +160,15 @@ function buildHost() {
     root.id = 'ytq-root';
 
     const toolbar = document.createElement('div');
-    toolbar.style.cssText = 'padding: 6px 16px; display:flex; gap:8px;';
+    toolbar.className = 'ytq-toolbar';
 
     const shuffleBtn = document.createElement('button');
-    shuffleBtn.textContent = 'Shuffle Upcoming';
-    shuffleBtn.style.cssText = 'background:#333; color:#e8eaed; border:none; border-radius:4px; padding:4px 10px; cursor:pointer; font-size:12px;';
+    shuffleBtn.className = 'ytq-btn';
+    shuffleBtn.innerHTML = `
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/>
+        </svg>
+        Shuffle Upcoming`;
     shuffleBtn.addEventListener('click', shuffleUpcoming);
     toolbar.appendChild(shuffleBtn);
     shadowRoot.appendChild(toolbar);
@@ -120,13 +190,19 @@ function renderCustomQueue() {
         row.className = 'ytq-row' + (song.isPlaying ? ' active' : '');
         row.dataset.index = index;
 
+        const indexEl = document.createElement('div');
+        indexEl.className = 'ytq-index';
+
         if (song.isPlaying) {
             const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
             svg.setAttribute('viewBox', '0 0 24 24');
             svg.classList.add('ytq-playing-icon');
             svg.innerHTML = '<path d="M3 18h2V6H3v12zm4 0h2v-6H7v6zm4 2h2V4h-2v16zm4-6h2v-4h-2v4zm4-8v12h2V6h-2z"/>';
-            row.appendChild(svg);
+            indexEl.appendChild(svg);
+        } else {
+            indexEl.textContent = index + 1
         }
+        row.appendChild(indexEl);
 
         const info = document.createElement('div');
         info.className = 'ytq-info';
@@ -157,6 +233,15 @@ function renderCustomQueue() {
     });
     
     root.appendChild(frag);
+
+    if (currentIndex >= 0) {
+        const activeRow = root.querySelectorAll('.ytq-row')[currentIndex];
+        if (activeRow) {
+            setTimeout(() => {
+                activeRow.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            }, 50);
+        }
+    }
 }
 
 // Reach outside Shadow DOM, click hidden native row
@@ -177,26 +262,29 @@ function proxyClickNativeItem(index) {
     }
 }
 
+const NOT_FOUND = Symbol();
 // Recursive helper to find a key anywhere inside a deeply nested object
 function findNestKeys(obj, keyToFind) {
-    if (!obj || typeof obj !== 'object') return null;
-    if (obj[keyToFind] !== undefined) return obj[keyToFind];
+    if (!obj || typeof obj !== 'object') return NOT_FOUND;
+    if (keyToFind in obj) return obj[keyToFind];
 
     const values = Array.isArray(obj) ? obj : Object.values(obj);
     for (const val of values) {
         const found = findNestKeys(val, keyToFind);
-        if (found) return found;
+        if (found !== NOT_FOUND) return found;
     }
-    return null;
+    return NOT_FOUND;
 }
 
 // Main Parser
 function processQueueData(data) {
     clearPersistedState();
     try {
+        console.log('[YTQueueExt] contents keys:', JSON.stringify(Object.keys(data.contents || {})));
+        console.log('[YTQueueExt] contents sample:', JSON.stringify(data.contents).slice(0, 500));
         const playlistPanel = findNestKeys(data, 'playlistPanelRenderer');
 
-        if (!playlistPanel || !playlistPanel.contents) {
+        if (playlistPanel === NOT_FOUND || !playlistPanel.contents) {
             console.warn('[YTQueueExt] playlistPanelRenderer not found in payload.')
             return;
         }
