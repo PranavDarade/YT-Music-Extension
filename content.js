@@ -15,7 +15,9 @@ function injectCloak() {
     const style = document.createElement('style');
     style.id = 'ytq-cloak';
     style.textContent = `
-        ytmusic-player-queue #contents > ytmusic-playlist-panel-video-wrapper-renderer{
+        ytmusic-player-queue ytmusic-player-queue-item,
+        ytmusic-player-queue ytmusic-playlist-panel-video-wrapper-renderer,
+        ytmusic-player-queue ytmusic-playlist-panel-video-renderer {
             display: none !important;
         }
         #ytq-host {
@@ -223,8 +225,9 @@ function renderCustomQueue() {
         row.appendChild(duration);
 
         row.addEventListener('click', () => {
-            proxyClickNativeItem(index);
-        }); 
+            // Click the actual native row we mirrored (no fragile index math).
+            if (song.el) song.el.click();
+        });
 
         frag.appendChild(row);
     });
@@ -241,98 +244,105 @@ function renderCustomQueue() {
     }
 }
 
-// Reach outside Shadow DOM, click hidden native row
-function proxyClickNativeItem(index) {
-    const nativeRows = document.querySelectorAll(
-        'ytmusic-player-queue-item'
-    );
+// Read the live native queue from the DOM — always reflects what is actually
+// playing, unlike the intercepted /next payload which goes stale on song changes.
+function parseNativeQueue() {
+    const contents = document.querySelector('ytmusic-player-queue #contents');
+    if (!contents) return [];
 
-    const target = nativeRows[index];
-    if (target) {
-        target.click();
-        console.log(`[YTQueueExt] Proxy click fired on native row ${index}`);
-    } else {
-        console.warn(`[YTQueueExt] Native row at index ${index} not found. Selectors may need updating.`);
-        
-    }
-}
-
-const NOT_FOUND = Symbol();
-// Recursive helper to find a key anywhere inside a deeply nested object
-function findNestKeys(obj, keyToFind) {
-    if (!obj || typeof obj !== 'object') return NOT_FOUND;
-    if (keyToFind in obj) return obj[keyToFind];
-
-    const values = Array.isArray(obj) ? obj : Object.values(obj);
-    for (const val of values) {
-        const found = findNestKeys(val, keyToFind);
-        if (found !== NOT_FOUND) return found;
-    }
-    return NOT_FOUND;
-}
-
-// Main Parser
-function processQueueData(data) {
-    clearPersistedState();
-    try {
-        console.log('[YTQueueExt] contents keys:', JSON.stringify(Object.keys(data.contents || {})));
-        console.log('[YTQueueExt] contents sample:', JSON.stringify(data.contents).slice(0, 500));
-        const playlistPanel = findNestKeys(data, 'playlistPanelRenderer');
-
-        if (playlistPanel === NOT_FOUND || !playlistPanel.contents) {
-            console.warn('[YTQueueExt] playlistPanelRenderer not found in payload.')
-            return;
+    const entries = [];
+    for (const node of contents.children) {
+        // Each logical row is either a bare queue-item or a wrapper (explicit/clean
+        // versions) whose FIRST queue-item is the primary/visible one. Skip our host
+        // and anything else.
+        let item = null;
+        if (node.matches('ytmusic-player-queue-item')) {
+            item = node;
+        } else if (node.matches('ytmusic-playlist-panel-video-wrapper-renderer')) {
+            item = node.querySelector('ytmusic-player-queue-item');
         }
+        if (!item) continue;
 
-        const cleanQueue = playlistPanel.contents.map(item => {
-            const renderer = item.playlistPanelVideoRenderer;
-            if (!renderer) return null;
-
-            return {
-                id:        renderer.videoId,
-                title:     renderer.title?.runs?.[0]?.text || 'Unknown Title',
-                artist:    renderer.longBylineText?.runs?.map(r => r.text).join('') 
-                           || 'Unknown Artist',
-                duration:  renderer.lengthText?.accessibility?.accessibilityData?.label
-                           || renderer.lengthText?.runs?.[0]?.text 
-                           || '--:--',
-                isPlaying: renderer.selected || false
-            };
-        }).filter(Boolean);
-
-        console.log('[YTQueueExt] Cleaned Queue:', cleanQueue);
-
-        const seen = new Set();
-        myQueue = cleanQueue.filter(song => {
-            if (seen.has(song.id)) return false;
-            seen.add(song.id);
-            return true;
+        const titleEl = item.querySelector('.song-title');
+        const bylineEl = item.querySelector('.byline');
+        entries.push({
+            el:        item,
+            title:     titleEl?.getAttribute('title') || titleEl?.textContent.trim() || 'Unknown Title',
+            artist:    bylineEl?.getAttribute('title') || bylineEl?.textContent.trim() || 'Unknown Artist',
+            duration:  item.querySelector('.duration')?.textContent.trim() || '--:--',
+            isPlaying: item.hasAttribute('selected')
         });
-        currentIndex = myQueue.findIndex(s => s.isPlaying);
-        renderCustomQueue();
-    } catch (e) {
-        console.error('[YTQueueExt] Parsing error:', e);
     }
+    return entries;
 }
 
-// Listen for intercepted fetch data
+// Cheap fingerprint so we only re-render (and only blow away a manual shuffle)
+// when the queue actually changes — not on every unrelated DOM mutation.
+function queueSignature(entries) {
+    return entries.map(e => (e.isPlaying ? '*' : '') + e.title).join('|');
+}
+
+let lastSignature = '';
+
+function refreshFromDOM() {
+    if (!shadowRoot) return;
+    const entries = parseNativeQueue();
+    if (entries.length === 0) return;
+
+    const sig = queueSignature(entries);
+    if (sig === lastSignature) return; // nothing changed — keep current view (incl. shuffle)
+    lastSignature = sig;
+
+    myQueue = entries;
+    currentIndex = myQueue.findIndex(s => s.isPlaying);
+    renderCustomQueue();
+}
+
+let refreshTimer = null;
+function scheduleRefresh() {
+    clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(refreshFromDOM, 200);
+}
+
+// The injected fetch interceptor signals when YT fetched new queue data; re-read
+// the DOM shortly after so our mirror stays current.
 window.addEventListener('message', (event) => {
     if (event.source !== window || !event.data) return;
     if (event.data.type === 'YTQ_RAW_QUEUE_DATA') {
-        const rawData = event.data.payload;
-        processQueueData(rawData);
+        scheduleRefresh();
     }
 });
 
 // Cloak first, then wait for DOM to be ready to anchor
 injectCloak();
 
-function tryMount() {
+// Re-mount the host whenever YT Music wipes/rebuilds the queue DOM (SPA re-render).
+// buildHost() is self-guarding, so this is a no-op when the host is already present.
+function ensureMounted() {
+    if (document.getElementById('ytq-host')) return false;
     buildHost();
-    if (!document.getElementById('ytq-host')) {
-        // Panel not ready yet (SPA lazy render), retry
-        setTimeout(tryMount, 800);
+    return !!document.getElementById('ytq-host');
+}
+
+// On any DOM change: make sure the host exists, then re-mirror the native queue.
+function onDomMutation() {
+    if (ensureMounted()) {
+        lastSignature = ''; // host was just (re)built — force a repaint
     }
+    scheduleRefresh();
+}
+
+const mountObserver = new MutationObserver(onDomMutation);
+
+function startMountWatcher() {
+    ensureMounted();
+    refreshFromDOM();
+    mountObserver.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['selected'] // catch the playing-row highlight moving
+    });
 }
 
 // Fisher Yates Shuffle (Custom Shuffle Engine)
@@ -361,6 +371,7 @@ function shuffleUpcoming() {
 const STORAGE_KEY = 'ytq_state';
 
 function saveQueueState() {
+    /*
     chrome.storage.local.set({
         [STORAGE_KEY]: JSON.stringify({
             queue:         myQueue,
@@ -368,9 +379,11 @@ function saveQueueState() {
             shuffleActive: true
         })
     });
+    */
 }
 
 function loadPersistanceState(onMiss) {
+    /*
     chrome.storage.local.get(STORAGE_KEY, (result) => {
         if (chrome.runtime.lastError || !result[STORAGE_KEY]) {
             onMiss();
@@ -390,18 +403,21 @@ function loadPersistanceState(onMiss) {
         } catch (e) {
             console.warn('[YTQueueExt] Persisted state corrupt, falling back.', e);
         }
-
-        onMiss();
     });
+        */
+    onMiss();
 }
 
+/*
 function boot() {
     loadPersistanceState(() => tryMount());
 }
+*/
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot);
+    document.addEventListener('DOMContentLoaded', startMountWatcher);
 } else {
-    boot();
+    //boot();
+    startMountWatcher();
 }
 
 // Wipe saved State
