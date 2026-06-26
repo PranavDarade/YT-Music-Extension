@@ -168,7 +168,12 @@ function buildHost() {
             <path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/>
         </svg>
         Shuffle Upcoming`;
-    shuffleBtn.addEventListener('click', shuffleUpcoming);
+    // Reorder the REAL native queue (handled in the main-world engine), not just
+    // this mirror — the engine reorders the DOM + syncs YT Music's store, and the
+    // mirror then re-renders off the resulting DOM change.
+    shuffleBtn.addEventListener('click', () => {
+        window.postMessage({ type: 'YTQ_CMD', action: 'shuffleUpcoming' }, '*');
+    });
     toolbar.appendChild(shuffleBtn);
     shadowRoot.appendChild(toolbar);
     shadowRoot.appendChild(root);
@@ -345,27 +350,10 @@ function startMountWatcher() {
     });
 }
 
-// Fisher Yates Shuffle (Custom Shuffle Engine)
-function fisherYatesShuffle(arr) {
-    const a = [...arr];
-    for (let i = a.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [a[i], a[j]] = [a[j], a[i]];
-    }
-    return a;
-}
-
-function shuffleUpcoming() {
-    if (currentIndex < 0 || myQueue.length === 0) return;
-
-    const past   = myQueue.slice(0, currentIndex + 1);
-    const future = myQueue.slice(currentIndex + 1);
-
-    myQueue = [...past, ...fisherYatesShuffle(future)];
-
-    saveQueueState();
-    renderCustomQueue();
-}
+// The real shuffle/scatter of the native queue lives in injected.js (main world),
+// since it needs page-context access to YT Music's store and queue internals. The
+// toolbar button posts a 'YTQ_CMD' message to it; the resulting DOM change flows
+// back here through the MutationObserver, which re-renders this mirror.
 
 // Persistance Layer
 const STORAGE_KEY = 'ytq_state';
